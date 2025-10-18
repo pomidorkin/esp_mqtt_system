@@ -1,0 +1,332 @@
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+
+// ========== КОНФИГУРАЦИЯ ==========
+const char* ssid = "Galaxy A51B860";
+const char* password = "gfifgfif";
+
+const char* mqtt_server = "10.164.154.6";   // ПРАВИЛЬНЫЙ IP
+const int mqtt_port = 1883;
+
+// ========== АВТОМАТИЧЕСКИЙ ID ==========
+String device_id;
+String device_type = "sensor"; // Автоматически определим тип
+
+// MQTT топики (будут созданы автоматически)
+String status_topic;
+String data_topic;
+String command_topic;
+String disconnect_topic;
+String error_topic;
+
+// ========== ОБЪЕКТЫ ==========
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// Переменные устройства
+unsigned long lastMsg = 0;
+unsigned long lastStatusUpdate = 0;
+bool ledState = false;
+int sensorValue = 0;
+
+// ========== ГЕНЕРАЦИЯ ID ==========
+String generateDeviceID() {
+  // Используем MAC адрес для уникального ID
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  String id = "ESP_" + mac.substring(6); // Берем последние 6 символов
+  return id;
+}
+
+// ========== СОЗДАНИЕ ТОПИКОВ ==========
+void createTopics() {
+  status_topic = "devices/" + device_id + "/status";
+  data_topic = "devices/" + device_id + "/data";
+  command_topic = "devices/" + device_id + "/command";
+  disconnect_topic = "devices/" + device_id + "/disconnect";
+  error_topic = "devices/" + device_id + "/error";
+}
+
+// ========== ОПРЕДЕЛЕНИЕ ТИПА УСТРОЙСТВА ==========
+void detectDeviceType() {
+  // Здесь можно добавить логику определения типа по подключенным датчикам
+  // Пока используем базовые типы в зависимости от конфигурации
+  
+  // Проверяем наличие датчиков (пример)
+  if (/* условие для реле */ false) {
+    device_type = "switch";
+  } else if (/* условие для RGB */ false) {
+    device_type = "rgb";
+  } else if (/* условие для сенсора */ true) {
+    device_type = "sensor"; // По умолчанию сенсор
+  }
+}
+
+// ========== НАСТРОЙКА WIFI ==========
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("Подключение к ");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.println("✅ WiFi подключен");
+    Serial.print("📡 IP адрес: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("🔑 MAC адрес: ");
+    Serial.println(WiFi.macAddress());
+    digitalWrite(LED_BUILTIN, LOW);
+  } else {
+    Serial.println("❌ Ошибка подключения к WiFi");
+  }
+}
+
+// ========== MQTT CALLBACK ==========
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("📨 Сообщение получено [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  
+  String message;
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.println(message);
+
+  // Проверяем, что команда для нашего устройства
+  String topicStr = String(topic);
+  if (!topicStr.startsWith("devices/" + device_id + "/")) {
+    Serial.println("⚠️ Команда не для этого устройства");
+    return;
+  }
+
+  // Парсим JSON
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, message);
+  
+  if (error) {
+    Serial.print("❌ Ошибка парсинга JSON: ");
+    Serial.println(error.c_str());
+    sendError("JSON parse error: " + String(error.c_str()));
+    return;
+  }
+
+  // Обрабатываем команды
+  String command = doc["command"] | "";
+  Serial.println("⚡ Команда: " + command);
+
+  if (command == "STATUS") {
+    sendStatus();
+  }
+  else if (command == "RESTART") {
+    sendStatus();
+    delay(1000);
+    ESP.restart();
+  }
+  else if (command == "RESET") {
+    sendStatus();
+  }
+  else if (command == "GET_CONFIG") {
+    sendConfig();
+  }
+  else if (command == "LED_ON") {
+    digitalWrite(LED_BUILTIN, LOW);
+    ledState = true;
+    sendStatus();
+  }
+  else if (command == "LED_OFF") {
+    digitalWrite(LED_BUILTIN, HIGH);
+    ledState = false;
+    sendStatus();
+  }
+  else if (command == "LED_TOGGLE") {
+    ledState = !ledState;
+    digitalWrite(LED_BUILTIN, !ledState);
+    sendStatus();
+  }
+  else if (command == "DISCOVER") {
+    // Ответ на broadcast discovery
+    sendStatus();
+  }
+  else if (command != "") {
+    Serial.println("❌ Неизвестная команда: " + command);
+    sendError("Unknown command: " + command);
+  }
+}
+
+// ========== ПОДКЛЮЧЕНИЕ MQTT ==========
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("🔗 Попытка подключения MQTT...");
+    
+    if (client.connect(device_id.c_str())) {
+      Serial.println("✅ MQTT подключен");
+      
+      // Подписываемся на команды
+      client.subscribe(command_topic.c_str());
+      Serial.println("📡 Подписан на: " + command_topic);
+      
+      // Отправляем статус при подключении
+      sendStatus();
+      
+    } else {
+      Serial.print("❌ Ошибка MQTT, rc=");
+      Serial.print(client.state());
+      Serial.println(" пробуем через 5 секунд...");
+      delay(5000);
+    }
+  }
+}
+
+// ========== ОТПРАВКА СТАТУСА ==========
+void sendStatus() {
+  DynamicJsonDocument doc(1024);
+  
+  doc["device_id"] = device_id;
+  doc["type"] = device_type;
+  doc["ip"] = WiFi.localIP().toString();
+  doc["mac"] = WiFi.macAddress();
+  doc["rssi"] = WiFi.RSSI();
+  doc["free_heap"] = ESP.getFreeHeap();
+  doc["uptime"] = millis();
+  doc["led_state"] = ledState;
+  doc["version"] = "2.0";
+  doc["firmware"] = "AutoID_System";
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  client.publish(status_topic.c_str(), jsonString.c_str());
+  Serial.println("📤 Отправлен статус: " + jsonString);
+}
+
+// ========== ОТПРАВКА ДАННЫХ ==========
+void sendData() {
+  DynamicJsonDocument doc(512);
+  
+  // Симуляция данных с датчиков
+  sensorValue = analogRead(A0);
+  float voltage = sensorValue * (3.3 / 1024.0);
+  
+  doc["sensor_value"] = sensorValue;
+  doc["voltage"] = voltage;
+  doc["temperature"] = random(200, 300) / 10.0;
+  doc["humidity"] = random(400, 800) / 10.0;
+  doc["timestamp"] = millis();
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  client.publish(data_topic.c_str(), jsonString.c_str());
+  Serial.println("📊 Отправлены данные: " + jsonString);
+}
+
+// ========== ОТПРАВКА КОНФИГУРАЦИИ ==========
+void sendConfig() {
+  DynamicJsonDocument doc(512);
+  
+  doc["device_id"] = device_id;
+  doc["type"] = device_type;
+  doc["firmware"] = "ESP8266_AutoID_v2.0";
+  doc["mqtt_server"] = mqtt_server;
+  doc["mqtt_port"] = mqtt_port;
+  doc["wifi_ssid"] = ssid;
+  doc["mac_address"] = WiFi.macAddress();
+  doc["auto_generated"] = true;
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  client.publish(data_topic.c_str(), jsonString.c_str());
+  Serial.println("⚙️ Отправлена конфигурация: " + jsonString);
+}
+
+// ========== ОТПРАВКА ОШИБКИ ==========
+void sendError(String error_msg) {
+  DynamicJsonDocument doc(256);
+  
+  doc["device_id"] = device_id;
+  doc["error"] = error_msg;
+  doc["timestamp"] = millis();
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  client.publish(error_topic.c_str(), jsonString.c_str());
+  Serial.println("❌ Отправлена ошибка: " + jsonString);
+}
+
+// ========== SETUP ==========
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+  
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println("🚀 Инициализация ESP8266...");
+  
+  setup_wifi();
+  
+  // Генерируем ID и создаем топики
+  device_id = generateDeviceID();
+  detectDeviceType();
+  createTopics();
+  
+  Serial.println("🎯 Информация об устройстве:");
+  Serial.println("   ID: " + device_id);
+  Serial.println("   Тип: " + device_type);
+  Serial.println("   Топики:");
+  Serial.println("     📡 " + status_topic);
+  Serial.println("     📊 " + data_topic);
+  Serial.println("     ⚡ " + command_topic);
+  
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+  
+  delay(2000);
+  Serial.println("✅ ESP8266 MQTT Client готов к работе");
+}
+
+// ========== MAIN LOOP ==========
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  unsigned long now = millis();
+  
+  // Отправляем данные каждые 10 секунд
+  if (now - lastMsg > 10000) {
+    lastMsg = now;
+    sendData();
+  }
+  
+  // Отправляем статус каждые 30 секунд
+  if (now - lastStatusUpdate > 30000) {
+    lastStatusUpdate = now;
+    sendStatus();
+  }
+  
+  // Индикация работы
+  static unsigned long lastBlink = 0;
+  if (now - lastBlink > 1000) {
+    lastBlink = now;
+    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  }
+  
+  delay(100);
+}

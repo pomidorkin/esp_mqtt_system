@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Статус системы - ESP Manager{% endblock %}
+{% block header %}📊 Статус системы{% endblock %}
+{% block subtitle %}Мониторинг работы MQTT брокера и подключений{% endblock %}
+
+{% block content %}
+<div class="status-grid">
+    <div class="status-card">
+        <h3>🔌 MQTT Брокер</h3>
+        <div class="status-info">
+            <div class="status-item">
+                <span>Статус:</span>
+                <strong id="mqtt-status">Проверка...</strong>
+            </div>
+            <div class="status-item">
+                <span>Хост:</span>
+                <strong>localhost:1883</strong>
+            </div>
+            <div class="status-item">
+                <span>Подключения:</span>
+                <strong id="mqtt-connections">0</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-card">
+        <h3>🌐 Веб-сервер</h3>
+        <div class="status-info">
+            <div class="status-item">
+                <span>Статус:</span>
+                <strong>✅ Активен</strong>
+            </div>
+            <div class="status-item">
+                <span>Порт:</span>
+                <strong>5000</strong>
+            </div>
+            <div class="status-item">
+                <span>Запросов:</span>
+                <strong id="request-count">0</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-card">
+        <h3>📈 Статистика</h3>
+        <div class="status-info">
+            <div class="status-item">
+                <span>Время работы:</span>
+                <strong id="uptime">00:00:00</strong>
+            </div>
+            <div class="status-item">
+                <span>Сообщений:</span>
+                <strong id="message-count">0</strong>
+            </div>
+            <div class="status-item">
+                <span>Ошибок:</span>
+                <strong id="error-count">0</strong>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="log-container">
+    <h3>📝 Журнал событий</h3>
+    <div id="event-log" class="event-log">
+        <div class="log-entry">Система запущена...</div>
+    </div>
+    <button class="btn btn-secondary" onclick="clearLog()">🧹 Очистить журнал</button>
+</div>
+{% endblock %}

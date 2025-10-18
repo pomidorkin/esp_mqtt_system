@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}ESP Device Manager{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🏠 {% block header %}Система управления ESP устройствами{% endblock %}</h1>
+            <div class="subtitle">{% block subtitle %}MQTT + Flask + Многопользовательская архитектура{% endblock %}</div>
+        </header>
+
+        <nav class="navigation">
+            <a href="{{ url_for('index') }}" class="nav-btn">📱 Устройства</a>
+            <a href="{{ url_for('status_page') }}" class="nav-btn">📊 Статус</a>
+            <a href="{{ url_for('commands_page') }}" class="nav-btn">⚡ Команды</a>
+        </nav>
+
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+
+        <footer class="footer">
+            <div class="system-status" id="system-status">
+                <span class="status-indicator" id="status-indicator"></span>
+                <span id="status-text">Загрузка...</span>
+            </div>
+            <button class="btn-exit" onclick="shutdownSystem()">🚪 Завершить работу</button>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

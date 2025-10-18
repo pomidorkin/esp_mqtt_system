@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Устройства - ESP Manager{% endblock %}
+{% block header %}📱 Подключенные устройства{% endblock %}
+{% block subtitle %}Мониторинг и управление ESP устройствами через MQTT{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-number" id="total-devices">0</div>
+            <div class="stat-label">Всего устройств</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="online-devices">0</div>
+            <div class="stat-label">Онлайн</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="device-types">0</div>
+            <div class="stat-label">Типов устройств</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button class="btn btn-primary" onclick="refreshDevices()">🔄 Обновить</button>
+        <button class="btn btn-secondary" onclick="discoverDevices()">🔍 Поиск устройств</button>
+        <button class="btn btn-info" onclick="sendToAll('STATUS')">📡 Запросить статусы</button>
+    </div>
+
+    <div class="devices-container">
+        <h3>📋 Список устройств</h3>
+        <div id="devices-list" class="devices-list">
+            <div class="loading">Загрузка устройств...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Специфичные функции для главной страницы
+function sendToAll(command) {
+    fetch('/api/broadcast', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({command: command})
+    })
+    .then(response => response.json())
+    .then(data => {
+        showNotification(`Команда ${command} отправлена всем устройствам`, 'success');
+        refreshDevices();
+    });
+}
+</script>
+{% endblock %}
