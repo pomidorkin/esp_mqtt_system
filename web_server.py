@@ -1,4 +1,4 @@
-# web_server.py - ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВЕРСИЯ
+# web_server.py - ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ ВЕРСИЯ С АВТООПРЕДЕЛЕНИЕМ IP
 from flask import Flask, render_template, jsonify, request, send_from_directory
 import paho.mqtt.client as mqtt
 import json
@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 from collections import defaultdict
 import logging
+import socket
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -15,15 +16,37 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Конфигурация
+# АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ СЕТЕВЫХ НАСТРОЕК
+def get_local_ip():
+    """Автоматическое определение локального IP"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
+
+LOCAL_IP = get_local_ip()
+
+# Конфигурация С АВТООПРЕДЕЛЕНИЕМ
 class Config:
-    MQTT_BROKER_HOST = "localhost"
+    MQTT_BROKER_HOST = LOCAL_IP  # АВТООПРЕДЕЛЕНИЕ!
     MQTT_BROKER_PORT = 1883
     MQTT_KEEPALIVE = 60
     WEB_HOST = "0.0.0.0"
     WEB_PORT = 5000
     DEVICE_TOPIC_PREFIX = "devices"
     STATUS_UPDATE_INTERVAL = 30  # секунды
+
+# Выводим информацию о конфигурации
+print("=" * 50)
+print("🌐 АВТОМАТИЧЕСКАЯ КОНФИГУРАЦИЯ СИСТЕМЫ")
+print(f"📍 Локальный IP: {LOCAL_IP}")
+print(f"🔗 MQTT брокер: {Config.MQTT_BROKER_HOST}:{Config.MQTT_BROKER_PORT}")
+print(f"🌐 Веб-интерфейс: http://{LOCAL_IP}:{Config.WEB_PORT}")
+print("=" * 50)
 
 # Хранилище данных
 class DeviceStorage:
@@ -141,7 +164,7 @@ mqtt_client = None
 def on_mqtt_connect(client, userdata, flags, rc):
     """Обработчик подключения MQTT"""
     if rc == 0:
-        logger.info("✅ MQTT клиент подключен к брокеру")
+        logger.info(f"✅ MQTT клиент подключен к брокеру {Config.MQTT_BROKER_HOST}:{Config.MQTT_BROKER_PORT}")
         
         # Подписываемся на топики устройств
         topics = [
@@ -156,6 +179,14 @@ def on_mqtt_connect(client, userdata, flags, rc):
             logger.info(f"📡 Подписка на топик: {topic}")
             
         storage.log_event("MQTT клиент подключен к брокеру")
+        
+        # Отправляем broadcast для поиска устройств
+        client.publish(f"{Config.DEVICE_TOPIC_PREFIX}/discovery", json.dumps({
+            'command': 'DISCOVER',
+            'timestamp': time.time(),
+            'source': 'server'
+        }))
+        
     else:
         logger.error(f"❌ Ошибка подключения MQTT: {rc}")
         storage.error_count += 1
@@ -217,6 +248,7 @@ def setup_mqtt():
     mqtt_client.on_message = on_mqtt_message
     
     try:
+        logger.info(f"🔄 Подключение к MQTT брокеру: {Config.MQTT_BROKER_HOST}:{Config.MQTT_BROKER_PORT}")
         mqtt_client.connect(Config.MQTT_BROKER_HOST, Config.MQTT_BROKER_PORT, Config.MQTT_KEEPALIVE)
         
         # Запускаем MQTT loop в отдельном потоке
@@ -242,22 +274,22 @@ def setup_mqtt():
 @app.route('/')
 def index():
     """Главная страница"""
-    return render_template('index.html')
+    return render_template('index.html', local_ip=LOCAL_IP)
 
 @app.route('/status')
 def status_page():
     """Страница статуса системы"""
-    return render_template('status.html')
+    return render_template('status.html', local_ip=LOCAL_IP)
 
 @app.route('/commands')
 def commands_page():
     """Страница отправки команд"""
-    return render_template('commands.html')
+    return render_template('commands.html', local_ip=LOCAL_IP)
 
 @app.route('/devices')
 def devices_page():
     """Страница управления устройствами"""
-    return render_template('devices.html')
+    return render_template('devices.html', local_ip=LOCAL_IP)
 
 # API endpoints
 @app.route('/api/devices')
@@ -270,7 +302,8 @@ def api_get_devices():
             'status': 'success',
             'devices': online_devices,
             'stats': storage.get_device_stats(),
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'mqtt_broker': Config.MQTT_BROKER_HOST
         })
         
     except Exception as e:
@@ -382,7 +415,8 @@ def api_system_status():
                 'web_server': True,
                 'uptime': system_info['uptime'],
                 'message_count': system_info['message_count'],
-                'error_count': system_info['error_count']
+                'error_count': system_info['error_count'],
+                'mqtt_broker': Config.MQTT_BROKER_HOST
             },
             'devices': device_stats,
             'timestamp': time.time()
@@ -443,7 +477,8 @@ def api_discover_devices():
         discovery_topic = f"{Config.DEVICE_TOPIC_PREFIX}/discovery"
         mqtt_client.publish(discovery_topic, json.dumps({
             'command': 'DISCOVER',
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'source': 'web'
         }))
         
         storage.log_event("Запущен принудительный поиск устройств")
@@ -456,33 +491,6 @@ def api_discover_devices():
         
     except Exception as e:
         logger.error(f"❌ Ошибка поиска устройств: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
-
-@app.route('/api/system/shutdown', methods=['POST'])
-def api_system_shutdown():
-    """API: Завершение работы системы"""
-    try:
-        storage.log_event("Запрошено завершение работы системы", 'warning')
-        logger.warning("🛑 Запрошено завершение работы системы")
-        
-        # Здесь можно добавить логику корректного завершения
-        def delayed_shutdown():
-            time.sleep(2)
-            os._exit(0)
-        
-        shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)
-        shutdown_thread.start()
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'System shutdown initiated'
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка завершения работы: {e}")
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -513,7 +521,7 @@ def start_web_server():
             return False
         
         logger.info("🚀 Запуск веб-сервера...")
-        logger.info(f"🌐 Веб-интерфейс будет доступен по адресу: http://{Config.WEB_HOST}:{Config.WEB_PORT}")
+        logger.info(f"🌐 Веб-интерфейс будет доступен по адресу: http://{LOCAL_IP}:{Config.WEB_PORT}")
         
         storage.log_event("Веб-сервер запущен")
         

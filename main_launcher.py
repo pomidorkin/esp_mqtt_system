@@ -1,3 +1,4 @@
+# main_launcher.py - ОБНОВЛЕННАЯ ВЕРСИЯ
 import sys
 import os
 import time
@@ -6,6 +7,7 @@ import signal
 from mqtt_broker import MQTTBroker
 from web_server import start_web_server
 import threading
+from config import Config  # Импортируем автоматический конфиг
 
 class SystemLauncher:
     def __init__(self):
@@ -39,6 +41,12 @@ class SystemLauncher:
         print("🚀 СИСТЕМА УПРАВЛЕНИЯ ESP УСТРОЙСТВАМИ")
         print("=" * 50)
         
+        # Показываем автоматическую конфигурацию
+        print(f"📍 Автоопределенный IP: {Config.LOCAL_IP}")
+        print(f"🔗 MQTT брокер: {Config.MQTT_BROKER_HOST}:{Config.MQTT_BROKER_PORT}")
+        print(f"🌐 Веб-интерфейс: {Config.WEB_URL}")
+        print("=" * 50)
+        
         # Регистрируем обработчики завершения
         atexit.register(self.cleanup)
         signal.signal(signal.SIGINT, lambda s, f: self.cleanup())
@@ -59,7 +67,8 @@ class SystemLauncher:
         web_thread.start()
         
         print("✅ Система успешно запущена!")
-        print(f"📱 Веб-интерфейс: http://localhost:5000")
+        print(f"📱 Веб-интерфейс: {Config.WEB_URL}")
+        print("💡 Убедитесь, что ESP устройства в той же WiFi сети")
         print("⏹️  Для остановки нажмите Ctrl+C")
         
         self.is_running = True

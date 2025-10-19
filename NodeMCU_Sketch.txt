@@ -6,12 +6,13 @@
 const char* ssid = "Galaxy A51B860";
 const char* password = "gfifgfif";
 
-const char* mqtt_server = "10.164.154.6";   // ПРАВИЛЬНЫЙ IP
+// АВТООПРЕДЕЛЕНИЕ MQTT БРОКЕРА!
+String mqtt_server = "";  // Будет определяться автоматически
 const int mqtt_port = 1883;
 
 // ========== АВТОМАТИЧЕСКИЙ ID ==========
 String device_id;
-String device_type = "sensor"; // Автоматически определим тип
+String device_type = "sensor";
 
 // MQTT топики (будут созданы автоматически)
 String status_topic;
@@ -29,6 +30,76 @@ unsigned long lastMsg = 0;
 unsigned long lastStatusUpdate = 0;
 bool ledState = false;
 int sensorValue = 0;
+
+// ========== ФУНКЦИЯ АВТООПРЕДЕЛЕНИЯ MQTT БРОКЕРА ==========
+String discoverMQTTBroker() {
+  Serial.println("🔍 Автопоиск MQTT брокера в сети...");
+  
+  // Получаем нашу сеть для сканирования
+  IPAddress localIP = WiFi.localIP();
+  IPAddress subnet = WiFi.subnetMask();
+  
+  // Определяем диапазон сканирования
+  IPAddress network = IPAddress(localIP[0] & subnet[0], 
+                               localIP[1] & subnet[1],
+                               localIP[2] & subnet[2], 
+                               0);
+  
+  WiFiClient testClient;
+  testClient.setTimeout(1000); // Таймаут 1 секунда
+  
+  // Сканируем первые 20 адресов
+  for (int i = 1; i <= 20; i++) {
+    IPAddress testIP = IPAddress(network[0], network[1], network[2], i);
+    
+    Serial.print("Проверка ");
+    Serial.print(testIP);
+    Serial.print("...");
+    
+    if (testClient.connect(testIP, 1883)) {
+      Serial.println(" ✅ MQTT найден!");
+      testClient.stop();
+      return testIP.toString();
+    }
+    testClient.stop();
+    delay(10);
+  }
+  
+  // Если не нашли - пробуем common IPs
+  Serial.println("⚠️ Стандартное сканирование не удалось, пробую common IPs...");
+  
+  IPAddress commonIPs[] = {
+    IPAddress(192,168,1,100),
+    IPAddress(192,168,0,100),
+    IPAddress(192,168,1,1),
+    IPAddress(192,168,0,1),
+    IPAddress(localIP[0], localIP[1], localIP[2], 100),
+    IPAddress(localIP[0], localIP[1], localIP[2], 50),
+    IPAddress(localIP[0], localIP[1], localIP[2], 2),
+    IPAddress(10,0,0,100),
+    IPAddress(172,16,0,100)
+  };
+  
+  int commonCount = sizeof(commonIPs) / sizeof(commonIPs[0]);
+  for (int i = 0; i < commonCount; i++) {
+    IPAddress testIP = commonIPs[i];
+    
+    Serial.print("Проверка ");
+    Serial.print(testIP);
+    Serial.print("...");
+    
+    if (testClient.connect(testIP, 1883)) {
+      Serial.println(" ✅ MQTT найден!");
+      testClient.stop();
+      return testIP.toString();
+    }
+    testClient.stop();
+    delay(10);
+  }
+  
+  Serial.println("❌ MQTT брокер не найден в сети");
+  return "";
+}
 
 // ========== ГЕНЕРАЦИЯ ID ==========
 String generateDeviceID() {
@@ -172,6 +243,20 @@ void reconnect() {
   while (!client.connected()) {
     Serial.print("🔗 Попытка подключения MQTT...");
     
+    // ПЕРЕОПРЕДЕЛЯЕМ MQTT БРОКЕР ПРИ КАЖДОМ ПОДКЛЮЧЕНИИ
+    if (mqtt_server == "") {
+      String discovered_ip = discoverMQTTBroker();
+      if (discovered_ip != "") {
+        mqtt_server = discovered_ip;
+        client.setServer(mqtt_server.c_str(), mqtt_port);
+        Serial.println("🔄 Обновлен MQTT брокер: " + mqtt_server);
+      } else {
+        Serial.println("❌ Не удалось найти MQTT брокер");
+        delay(5000);
+        continue;
+      }
+    }
+    
     if (client.connect(device_id.c_str())) {
       Serial.println("✅ MQTT подключен");
       
@@ -186,6 +271,9 @@ void reconnect() {
       Serial.print("❌ Ошибка MQTT, rc=");
       Serial.print(client.state());
       Serial.println(" пробуем через 5 секунд...");
+      
+      // Сбрасываем MQTT сервер для повторного поиска
+      mqtt_server = "";
       delay(5000);
     }
   }
@@ -205,6 +293,7 @@ void sendStatus() {
   doc["led_state"] = ledState;
   doc["version"] = "2.0";
   doc["firmware"] = "AutoID_System";
+  doc["mqtt_broker"] = mqtt_server; // Добавляем информацию о брокере
   
   String jsonString;
   serializeJson(doc, jsonString);
@@ -246,6 +335,7 @@ void sendConfig() {
   doc["wifi_ssid"] = ssid;
   doc["mac_address"] = WiFi.macAddress();
   doc["auto_generated"] = true;
+  doc["auto_discovery"] = true; // Флаг автоопределения
   
   String jsonString;
   serializeJson(doc, jsonString);
@@ -276,7 +366,7 @@ void setup() {
   
   Serial.begin(115200);
   Serial.println();
-  Serial.println("🚀 Инициализация ESP8266...");
+  Serial.println("🚀 Инициализация ESP8266 с автоопределением MQTT...");
   
   setup_wifi();
   
@@ -285,19 +375,31 @@ void setup() {
   detectDeviceType();
   createTopics();
   
+  // АВТООПРЕДЕЛЕНИЕ MQTT БРОКЕРА
+  String discovered_ip = discoverMQTTBroker();
+  if (discovered_ip != "") {
+    mqtt_server = discovered_ip;
+    Serial.println("✅ MQTT брокер определен автоматически: " + mqtt_server);
+  } else {
+    Serial.println("❌ Не удалось автоматически определить MQTT брокер");
+    // Можно добавить fallback на статический IP или продолжить попытки
+  }
+  
   Serial.println("🎯 Информация об устройстве:");
   Serial.println("   ID: " + device_id);
   Serial.println("   Тип: " + device_type);
+  Serial.println("   MQTT сервер: " + mqtt_server);
   Serial.println("   Топики:");
   Serial.println("     📡 " + status_topic);
   Serial.println("     📊 " + data_topic);
   Serial.println("     ⚡ " + command_topic);
   
-  client.setServer(mqtt_server, mqtt_port);
+  client.setServer(mqtt_server.c_str(), mqtt_port);
   client.setCallback(callback);
   
   delay(2000);
   Serial.println("✅ ESP8266 MQTT Client готов к работе");
+  Serial.println("=====================================");
 }
 
 // ========== MAIN LOOP ==========
