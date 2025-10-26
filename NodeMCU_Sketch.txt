@@ -19,6 +19,17 @@ WiFiSettings wifiSettings;
 // Пины
 const int CONFIG_BUTTON_PIN = D3;     // Кнопка для перехода в режим настройки
 const int STATUS_LED = LED_BUILTIN;
+const int ACTION_BUTTON_PIN = D1;    // Вторая кнопка
+const int RGB_RED_PIN = D5;          // RGB красный
+const int RGB_GREEN_PIN = D6;        // RGB зеленый  
+const int RGB_BLUE_PIN = D7;         // RGB синий
+
+// ========== ПЕРЕМЕННЫЕ СОСТОЯНИЯ ==========
+bool actionButtonPressed = false;
+int currentRed = 0;
+int currentGreen = 0;
+int currentBlue = 0;
+bool isLedOn = true;
 
 // Переменные режимов
 bool configMode = false;
@@ -33,7 +44,8 @@ const int mqtt_port = 1883;
 
 // Автоматический ID
 String device_id;
-String device_type = "sensor";
+//String device_type = "sensor";
+String device_type = "rgb_controller";
 
 // MQTT топики
 String status_topic;
@@ -426,10 +438,11 @@ String discoverMQTTBrokerNonBlocking() {
 }
 
 void sendStatus() {
-  DynamicJsonDocument doc(1024);
+  /*DynamicJsonDocument doc(1024);
   
+  // Основная информация об устройстве
   doc["device_id"] = device_id;
-  doc["type"] = device_type;
+  doc["type"] = device_type;  // ТОЛЬКО ОДИН РАЗ!
   doc["ip"] = WiFi.localIP().toString();
   doc["mac"] = WiFi.macAddress();
   doc["rssi"] = WiFi.RSSI();
@@ -441,11 +454,105 @@ void sendStatus() {
   doc["mqtt_broker"] = mqtt_server;
   doc["config_mode"] = configMode;
   
+  // Информация для RGB устройств
+  doc["action_button_pressed"] = actionButtonPressed;
+  doc["led_on"] = isLedOn;
+  doc["rgb_color"] = String(currentRed) + "," + String(currentGreen) + "," + String(currentBlue);
+  doc["available"] = !actionButtonPressed; // Доступно для перемешивания
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+
+  // Отладочная печать
+  Serial.print("📤 Отправка статуса в топик: ");
+  Serial.println(status_topic);
+  Serial.print("📤 Данные: ");
+  Serial.println(jsonString);
+  
+  client.publish(status_topic.c_str(), jsonString.c_str());
+  Serial.println("✅ Статус отправлен");
+  */
+   // ПРОВЕРКА СОЕДИНЕНИЯ ПЕРЕД ОТПРАВКОЙ
+  if (!client.connected()) {
+    Serial.println("❌ MQTT не подключен, статус не отправлен");
+    return;
+  }
+  
+  DynamicJsonDocument doc(512);
+  
+  // УПРОЩАЕМ СТАТУС ДЛЯ ТЕСТА
+  doc["id"] = device_id;
+  doc["t"] = device_type;
+  doc["ip"] = WiFi.localIP().toString();
+  doc["rssi"] = WiFi.RSSI();
+  doc["up"] = millis();
+  
+  // ВРЕМЕННО УБИРАЕМ ОСТАЛЬНЫЕ ПОЛЯ
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+
+  Serial.print("📤 ТЕСТОВЫЙ СТАТУС (");
+  Serial.print(jsonString.length());
+  Serial.print(" chars): ");
+  Serial.println(jsonString);
+  
+  // ПРОВЕРЯЕМ ПУБЛИКАЦИЮ С ТАЙМАУТОМ
+  bool success = client.publish(status_topic.c_str(), jsonString.c_str());
+  
+  Serial.print("📤 Результат публикации: ");
+  Serial.println(success ? "✅ УСПЕХ" : "❌ ОШИБКА");
+  
+  // ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ О MQTT
+  Serial.print("📡 MQTT состояние: ");
+  Serial.println(client.state());
+  
+  if (!success) {
+    Serial.print("❌ MQTT ошибка: ");
+    switch (client.state()) {
+      case -4: Serial.println("MQTT_CONNECTION_TIMEOUT"); break;
+      case -3: Serial.println("MQTT_CONNECTION_LOST"); break;
+      case -2: Serial.println("MQTT_CONNECT_FAILED"); break;
+      case -1: Serial.println("MQTT_DISCONNECTED"); break;
+      case 1: Serial.println("MQTT_CONNECT_BAD_PROTOCOL"); break;
+      case 2: Serial.println("MQTT_CONNECT_BAD_CLIENT_ID"); break;
+      case 3: Serial.println("MQTT_CONNECT_UNAVAILABLE"); break;
+      case 4: Serial.println("MQTT_CONNECT_BAD_CREDENTIALS"); break;
+      case 5: Serial.println("MQTT_CONNECT_UNAUTHORIZED"); break;
+      default: Serial.println(client.state()); break;
+    }
+  }
+}
+
+void sendButtonStatus() {
+  DynamicJsonDocument doc(512);
+  
+  doc["device_id"] = device_id;
+  doc["action_button_pressed"] = actionButtonPressed;
+  doc["led_on"] = isLedOn;
+  doc["timestamp"] = millis();
+  
   String jsonString;
   serializeJson(doc, jsonString);
   
-  client.publish(status_topic.c_str(), jsonString.c_str());
-  Serial.println("📤 Отправлен статус: " + jsonString);
+  String button_topic = "devices/" + device_id + "/button";
+  client.publish(button_topic.c_str(), jsonString.c_str());
+  Serial.println("🔘 Статус кнопки отправлен: " + jsonString);
+}
+
+void sendMixColorsCommand() {
+  DynamicJsonDocument doc(256);
+  
+  doc["command"] = "MIX_COLORS";
+  doc["source_device"] = device_id;
+  doc["timestamp"] = millis();
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  String mixer_topic = "devices/mixer/command";
+  client.publish(mixer_topic.c_str(), jsonString.c_str());
+  Serial.println("🎨 Команда перемешивания отправлена");
 }
 
 void sendData() {
@@ -552,6 +659,34 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println("❌ Неизвестная команда: " + command);
     sendError("Unknown command: " + command);
   }
+  else if (command == "SET_COLOR") {
+    // Команда установки цвета от сервера
+    int red = doc["red"] | 0;
+    int green = doc["green"] | 0;
+    int blue = doc["blue"] | 0;
+    
+    Serial.print("🎨 Получена команда SET_COLOR: ");
+    Serial.print("R="); Serial.print(red);
+    Serial.print(" G="); Serial.print(green);
+    Serial.print(" B="); Serial.println(blue);
+    
+    setRGBColor(red, green, blue);
+    isLedOn = (red > 0 || green > 0 || blue > 0);
+    sendStatus(); // Отправляем обновленный статус
+}
+  else if (command == "RESET_BUTTON") {
+    // Сброс состояния кнопки
+    actionButtonPressed = false;
+    sendStatus();
+  }
+  else if (command == "MIX_COLORS") {
+    // Команда перемешивания цветов (для mixer устройства)
+    if (device_type == "color_mixer") {
+      // Логика перемешивания будет на сервере
+      // Это просто подтверждение
+      sendStatus();
+    }
+  }
 }
 
 void reconnect() {
@@ -600,11 +735,55 @@ void reconnect() {
   }
 }
 
+void setRGBColor(int red, int green, int blue) {
+  analogWrite(RGB_RED_PIN, red);
+  analogWrite(RGB_GREEN_PIN, green); 
+  analogWrite(RGB_BLUE_PIN, blue);
+  currentRed = red;
+  currentGreen = green;
+  currentBlue = blue;
+}
+
+void checkActionButton() {
+  static unsigned long lastButtonPress = 0;
+  int buttonState = digitalRead(ACTION_BUTTON_PIN);
+  
+  if (buttonState == LOW && millis() - lastButtonPress > 500) {
+    lastButtonPress = millis();
+    handleActionButtonPress();
+  }
+}
+
+void handleActionButtonPress() {
+  if (device_type == "rgb_controller") {
+    // Для первого типа устройств - отправить статус кнопки
+    actionButtonPressed = true;
+    isLedOn = false;
+    setRGBColor(0, 0, 0); // Выключить светодиод
+    
+    // Отправить статус на сервер
+    sendButtonStatus();
+    
+  } else if (device_type == "color_mixer") {
+    // Для второго типа устройств - запросить перемешивание цветов
+    sendMixColorsCommand();
+  }
+}
+
 // ========== SETUP ==========
 void setup() {
   pinMode(STATUS_LED, OUTPUT);
   pinMode(CONFIG_BUTTON_PIN, INPUT_PULLUP);
   digitalWrite(STATUS_LED, HIGH); // LED выключен
+
+   // Пины RGB
+  pinMode(ACTION_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(RGB_RED_PIN, OUTPUT);
+  pinMode(RGB_GREEN_PIN, OUTPUT);
+  pinMode(RGB_BLUE_PIN, OUTPUT);
+  
+  // Инициализация RGB
+  setRGBColor(1, 1, 1);
   
   Serial.begin(115200);
   Serial.println();
@@ -665,6 +844,7 @@ void loop() {
   } else {
     // Нормальный режим работы
     checkConfigButton();
+    checkActionButton(); // Проверка второй кнопки
     
     if (!client.connected()) {
       reconnect();
@@ -677,14 +857,17 @@ void loop() {
     if (millis() - lastMsg > 10000) {
       lastMsg = millis();
       sendData();
+      sendStatus();
     }
     
     // Отправка статуса каждые 30 секунд
+    /*
     static unsigned long lastStatusUpdate = 0;
     if (millis() - lastStatusUpdate > 30000) {
       lastStatusUpdate = millis();
       sendStatus();
     }
+    */
     
     // Мигание LED при подключении (2 секунды период)
     static unsigned long lastBlink = 0;

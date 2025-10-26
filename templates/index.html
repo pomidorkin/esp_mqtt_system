@@ -19,12 +19,18 @@
             <div class="stat-number" id="device-types">0</div>
             <div class="stat-label">Типов устройств</div>
         </div>
+        <div class="stat-card">
+            <div class="stat-number" id="available-rgb">0</div>
+            <div class="stat-label">Доступно RGB</div>
+        </div>
     </div>
 
     <div class="controls">
         <button class="btn btn-primary" onclick="refreshDevices()">🔄 Обновить</button>
         <button class="btn btn-secondary" onclick="discoverDevices()">🔍 Поиск устройств</button>
         <button class="btn btn-info" onclick="sendToAll('STATUS')">📡 Запросить статусы</button>
+        <button class="btn btn-warning" onclick="mixColors()">🎨 Перемешать цвета</button>
+        <button class="btn btn-success" onclick="setAllAvailableColor()">🌈 Один цвет для всех</button>
     </div>
 
     <div class="devices-container">
@@ -34,22 +40,235 @@
         </div>
     </div>
 </div>
+
+<!-- Модальное окно для выбора цвета -->
+<div id="colorModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3>🎨 Выбор цвета</h3>
+        <div class="color-picker-container">
+            <input type="color" id="colorPicker" value="#ff0000">
+            <div class="color-presets">
+                <button class="color-preset" style="background: #ff0000;" onclick="setPresetColor('#ff0000')"></button>
+                <button class="color-preset" style="background: #00ff00;" onclick="setPresetColor('#00ff00')"></button>
+                <button class="color-preset" style="background: #0000ff;" onclick="setPresetColor('#0000ff')"></button>
+                <button class="color-preset" style="background: #ffff00;" onclick="setPresetColor('#ffff00')"></button>
+                <button class="color-preset" style="background: #ff00ff;" onclick="setPresetColor('#ff00ff')"></button>
+                <button class="color-preset" style="background: #00ffff;" onclick="setPresetColor('#00ffff')"></button>
+                <button class="color-preset" style="background: #ffffff;" onclick="setPresetColor('#ffffff')"></button>
+                <button class="color-preset" style="background: #000000;" onclick="setPresetColor('#000000')"></button>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-primary" onclick="applyColorToDevice()">Применить</button>
+            <button class="btn btn-secondary" onclick="closeColorModal()">Отмена</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-// Специфичные функции для главной страницы
-function sendToAll(command) {
-    fetch('/api/broadcast', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({command: command})
-    })
-    .then(response => response.json())
-    .then(data => {
-        showNotification(`Команда ${command} отправлена всем устройствам`, 'success');
-        refreshDevices();
-    });
-}
+    // Глобальные переменные для модального окна
+    let currentDeviceId = null;
+
+    // Специфичные функции для главной страницы
+    function sendToAll(command) {
+        fetch('/api/broadcast', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: command })
+        })
+            .then(response => response.json())
+            .then(data => {
+                showNotification(`Команда ${command} отправлена всем устройствам`, 'success');
+                refreshDevices();
+            });
+    }
+
+    function mixColors() {
+        fetch('/api/devices/mix_colors', {
+            method: 'POST'
+        })
+            .then(response => response.json())
+            .then(data => {
+                showNotification(data.message, data.status);
+                refreshDevices();
+            });
+    }
+
+    function setAllAvailableColor() {
+        openColorModal('all');
+    }
+
+    function openColorModal(deviceId) {
+        currentDeviceId = deviceId;
+        const modal = document.getElementById('colorModal');
+        modal.style.display = 'block';
+
+        if (deviceId === 'all') {
+            document.querySelector('.modal-content h3').textContent = '🎨 Выбор цвета для всех устройств';
+        } else {
+            document.querySelector('.modal-content h3').textContent = `🎨 Выбор цвета для ${deviceId}`;
+        }
+    }
+
+    function closeColorModal() {
+        const modal = document.getElementById('colorModal');
+        modal.style.display = 'none';
+        currentDeviceId = null;
+    }
+
+    function setPresetColor(color) {
+        document.getElementById('colorPicker').value = color;
+    }
+
+    function applyColorToDevice() {
+        const color = document.getElementById('colorPicker').value;
+        const r = parseInt(color.substr(1, 2), 16);
+        const g = parseInt(color.substr(3, 2), 16);
+        const b = parseInt(color.substr(5, 2), 16);
+
+        console.log("🎨 Применение цвета:", { device: currentDeviceId, r, g, b });
+
+        if (currentDeviceId === 'all') {
+            // Установить цвет для всех доступных устройств
+            fetch('/api/devices/set_all_color', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ red: r, green: g, blue: b })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Ответ сервера:", data);
+                    showNotification(data.message, data.status);
+                    refreshDevices();
+                })
+                .catch(error => {
+                    console.error("Ошибка:", error);
+                    showNotification('Ошибка установки цвета', 'error');
+                });
+        } else if (currentDeviceId) {
+            // Установить цвет для конкретного устройства
+            deviceManager.setDeviceColor(currentDeviceId, r, g, b);
+        }
+
+        closeColorModal();
+    }
+
+    // Закрытие модального окна при клике вне его
+    window.onclick = function (event) {
+        const modal = document.getElementById('colorModal');
+        if (event.target == modal) {
+            closeColorModal();
+        }
+    }
+
+    // Закрытие модального окна по кнопке закрытия
+    document.querySelector('.close').onclick = closeColorModal;
 </script>
+
+<style>
+    /* Стили для модального окна */
+    .modal {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.5);
+    }
+
+    .modal-content {
+        background-color: white;
+        margin: 10% auto;
+        padding: 20px;
+        border-radius: 10px;
+        width: 400px;
+        max-width: 90%;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    }
+
+    .close {
+        color: #aaa;
+        float: right;
+        font-size: 28px;
+        font-weight: bold;
+        cursor: pointer;
+    }
+
+        .close:hover {
+            color: black;
+        }
+
+    .color-picker-container {
+        margin: 20px 0;
+        text-align: center;
+    }
+
+    #colorPicker {
+        width: 100px;
+        height: 100px;
+        border: none;
+        border-radius: 50%;
+        cursor: pointer;
+    }
+
+    .color-presets {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 15px 0;
+    }
+
+    .color-preset {
+        width: 30px;
+        height: 30px;
+        border: 2px solid #ddd;
+        border-radius: 50%;
+        cursor: pointer;
+        transition: transform 0.2s;
+    }
+
+        .color-preset:hover {
+            transform: scale(1.2);
+            border-color: #333;
+        }
+
+    .modal-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+    }
+
+    /* Дополнительные стили для карточек устройств */
+    .rgb-color-indicator {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+        border: 1px solid #ddd;
+    }
+
+    .device-status-badge {
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.8em;
+        margin-left: 8px;
+    }
+
+    .status-available {
+        background: #27ae60;
+        color: white;
+    }
+
+    .status-pressed {
+        background: #e74c3c;
+        color: white;
+    }
+</style>
 {% endblock %}
